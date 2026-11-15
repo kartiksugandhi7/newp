@@ -119,15 +119,21 @@ const pageLoadedAt = Date.now();
 let audioCtx;
 
 // ----- Sound & notifications -----
-function beep() {
+// Plays `times` beeps in a row (each 0.25 s long, 0.15 s gap)
+function beep(times = 1) {
   if (!soundOn) return;
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.type = "square"; o.frequency.value = 880;
-    o.connect(g); g.connect(audioCtx.destination);
-    g.gain.value = 0.15;
-    o.start(); o.stop(audioCtx.currentTime + 0.4);
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const start = audioCtx.currentTime;
+    for (let i = 0; i < times; i++) {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = "square"; o.frequency.value = 880;
+      o.connect(g); g.connect(audioCtx.destination);
+      g.gain.value = 0.15;
+      const t = start + i * 0.4;
+      o.start(t); o.stop(t + 0.25);
+    }
   } catch (e) {}
 }
 
@@ -172,7 +178,7 @@ onChildAdded(query(ref(db, "events"), limitToLast(50)), snap => {
   if (ev.ts && ev.ts > pageLoadedAt - 2000 && ev.type !== "startup") {
     showBanner(ev);
     if (bigMsgs[ev.type]) showBig(bigMsgs[ev.type], new Date(ev.ts).toLocaleTimeString());
-    beep();
+    beep(7);   // 7 beeps in a row on every alert
     if ("Notification" in window && Notification.permission === "granted") {
       new Notification("Baby Safety Alert", { body: ev.message });
     }
