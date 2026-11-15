@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baby Safety Monitor</title>
+<style>
+  :root { --bg:#f4f6fb; --card:#fff; --text:#1c2333; --muted:#6b7280;
+          --ok:#16a34a; --warn:#d97706; --danger:#dc2626; --info:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1420; --card:#1a2133; --text:#e8ecf5; --muted:#8b95a9; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:20px 16px 8px; text-align:center; }
+  h1 { margin:0; font-size:1.4rem; }
+  .status { display:inline-block; margin-top:8px; padding:4px 12px; border-radius:99px;
+            font-size:.85rem; color:#fff; background:var(--muted); }
+  .status.online { background:var(--ok); }
+  .status.offline { background:var(--danger); }
+  main { max-width:640px; margin:0 auto; padding:12px 16px 40px; }
+  .banner { display:none; margin:12px 0; padding:14px; border-radius:12px; color:#fff;
+            font-weight:600; text-align:center; animation:pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.65; } }
+  .grid { display:grid; grid-template-columns:1fr; gap:12px; margin:12px 0; }
+  .card { background:var(--card); border-radius:12px; padding:14px; }
+  .card small { color:var(--muted); }
+  .card .val { font-size:1.5rem; font-weight:700; margin-top:4px; }
+  .bigmsg { margin:12px 0; padding:22px 14px; border-radius:14px; text-align:center;
+            color:#fff; font-size:1.5rem; font-weight:700; transition:background .3s; }
+  .bigmsg small { display:block; margin-top:6px; font-size:.8rem; font-weight:400; opacity:.9; }
+  .bigmsg.calm   { background:var(--ok); }
+  .bigmsg.wake   { background:var(--warn); animation:pulse 1s infinite; }
+  .bigmsg.closer { background:var(--danger); animation:pulse .7s infinite; }
+  .bigmsg.vib    { background:var(--danger); animation:pulse .7s infinite; }
+  .actions { display:flex; gap:8px; margin:8px 0 16px; }
+  button { flex:1; padding:10px; border:0; border-radius:10px; background:var(--info);
+           color:#fff; font-size:.95rem; cursor:pointer; }
+  button.alt { background:var(--muted); }
+  h2 { font-size:1.05rem; margin:18px 0 8px; }
+  .event { display:flex; gap:10px; background:var(--card); border-radius:12px;
+           padding:12px; margin-bottom:8px; border-left:5px solid var(--info); }
+  .event.movement { border-color:var(--warn); }
+  .event.open { border-color:var(--danger); }
+  .event.vibration { border-color:var(--danger); }
+  .event .t { font-weight:600; }
+  .event .when { color:var(--muted); font-size:.8rem; }
+  .empty { color:var(--muted); text-align:center; padding:20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>👶 Baby Safety Monitor</h1>
+  <span id="status" class="status">Connecting…</span>
+</header>
+
+<main>
+  <div id="banner" class="banner"></div>
+
+  <div id="bigMsg" class="bigmsg calm">
+    <div id="bigText">✅ Baby is sleeping peacefully</div>
+    <small id="bigTime"></small>
+  </div>
+
+  <div class="grid">
+    <div class="card"><small>Inside sensor</small><div class="val" id="dIn">--</div></div>
+  </div>
+
+  <div class="actions">
+    <button id="notifBtn">Enable notifications</button>
+    <button id="muteBtn" class="alt">Sound: ON</button>
+  </div>
+
+  <h2>Recent alerts</h2>
+  <div id="events"><div class="empty">No alerts yet</div></div>
+</main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, query, limitToLast, onChildAdded, onValue }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBXhfJX--2rumiZmJFF7S8Bj_yLKWtnV7Y",
+  authDomain: "babys-ac1f2.firebaseapp.com",
+  databaseURL: "https://babys-ac1f2-default-rtdb.firebaseio.com",
+  projectId: "babys-ac1f2",
+  storageBucket: "babys-ac1f2.firebasestorage.app",
+  messagingSenderId: "353990415328",
+  appId: "1:353990415328:web:21540ba81b7f9ccedf9185"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const $ = id => document.getElementById(id);
+const labels = { movement:"👶 Baby woke up", open:"🚨 Someone is closer to the baby", vibration:"⚠️ Vibration on the net", startup:"✅ Device" };
+
+// Big on-screen message for each alert type
+const bigMsgs = {
+  movement:  { cls:"wake",   text:"👶 Baby woke up" },
+  open:      { cls:"closer", text:"🚨 Someone is closer to the baby!" },
+  vibration: { cls:"vib",    text:"⚠️ Vibration on the net!" }
+};
+const CALM = { cls:"calm", text:"✅ Baby is sleeping peacefully" };
+let calmTimer;
+function showBig(m, time) {
+  $("bigMsg").className = "bigmsg " + m.cls;
+  $("bigText").textContent = m.text;
+  $("bigTime").textContent = time || "";
+  clearTimeout(calmTimer);
+  if (m !== CALM) calmTimer = setTimeout(() => showBig(CALM, ""), 20000);
+}
+const colors = { movement:"#d97706", open:"#dc2626", vibration:"#dc2626", startup:"#2563eb" };
+
+let soundOn = true;
+let lastBeat = 0;
+const pageLoadedAt = Date.now();
+let audioCtx;
+
+// ----- Sound & notifications -----
+function beep() {
+  if (!soundOn) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "square"; o.frequency.value = 880;
+    o.connect(g); g.connect(audioCtx.destination);
+    g.gain.value = 0.15;
+    o.start(); o.stop(audioCtx.currentTime + 0.4);
+  } catch (e) {}
+}
+
+$("notifBtn").onclick = async () => {
+  if (!("Notification" in window)) return alert("Notifications not supported here");
+  const p = await Notification.requestPermission();
+  $("notifBtn").textContent = p === "granted" ? "Notifications enabled ✓" : "Notifications blocked";
+};
+$("muteBtn").onclick = () => {
+  soundOn = !soundOn;
+  $("muteBtn").textContent = "Sound: " + (soundOn ? "ON" : "OFF");
+  if (soundOn) beep();   // also unlocks audio in the browser
+};
+
+function showBanner(ev) {
+  const b = $("banner");
+  b.textContent = labels[ev.type] || "Alert";
+  b.style.background = colors[ev.type] || "#2563eb";
+  b.style.display = "block";
+  clearTimeout(showBanner.t);
+  showBanner.t = setTimeout(() => b.style.display = "none", 15000);
+}
+
+// ----- Events list -----
+const eventsEl = $("events");
+let first = true;
+
+onChildAdded(query(ref(db, "events"), limitToLast(50)), snap => {
+  const ev = snap.val();
+  if (!ev) return;
+  if (first) { eventsEl.innerHTML = ""; first = false; }
+
+  const div = document.createElement("div");
+  div.className = "event " + ev.type;
+  const when = ev.ts ? new Date(ev.ts).toLocaleString() : "";
+  div.innerHTML = `<div><div class="t"></div><div class="when"></div></div>`;
+  div.querySelector(".t").textContent = labels[ev.type] || ev.message;
+  div.querySelector(".when").textContent = when;
+  eventsEl.prepend(div);
+
+  // Only alert for events that arrive after the page opened (not history)
+  if (ev.ts && ev.ts > pageLoadedAt - 2000 && ev.type !== "startup") {
+    showBanner(ev);
+    if (bigMsgs[ev.type]) showBig(bigMsgs[ev.type], new Date(ev.ts).toLocaleTimeString());
+    beep();
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification("Baby Safety Alert", { body: ev.message });
+    }
+  }
+});
+
+// ----- Device status / heartbeat -----
+onValue(ref(db, "status"), snap => {
+  const s = snap.val();
+  if (!s) return;
+  lastBeat = s.ts || 0;
+  $("dIn").textContent  = s.inside_cm  > 0 ? s.inside_cm.toFixed(0)  + " cm" : "--";
+  updateOnline();
+});
+
+function updateOnline() {
+  const st = $("status");
+  const online = lastBeat && (Date.now() - lastBeat) < 90000;
+  st.textContent = online ? "Device online" : "Device offline";
+  st.className = "status " + (online ? "online" : "offline");
+}
+setInterval(updateOnline, 5000);
+</script>
+</body>
+</html>
